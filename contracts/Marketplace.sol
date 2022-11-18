@@ -9,30 +9,39 @@ import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 import "./Collection.sol";
 
 contract Marketplace is Ownable, ReentrancyGuard {
-    uint256 public feeAmount = 0.02 ether;
-    uint256 private collectedFee;
+    uint256 public listFee = 0.02 ether;
+    uint256 public collectedFee;
 
-    event LogCollectionCreated(string name, string description);
-    event LogListedItem(uint256 _tokenId, address from, address to);
-    event LogBoughtItem(
+    event CollectionCreated(string name, string description);
+    event ItemListed(uint256 _tokenId, address from, address to);
+    event ItemBought(
         uint256 _tokenId,
         address buyer,
         address seller,
         uint256 price
     );
 
+    modifier collectionExist(address collectionOwner, uint256 index) {
+        require(
+            index > 0 && userCollections[collectionOwner] >= index,
+            "Collection doesn't exist!"
+        );
+        _;
+    }
+
     mapping(address => mapping(uint256 => Collection)) private collection;
     mapping(address => uint256) private userCollections;
-    mapping(uint256 => Item) public listedItems;
-    uint256 private itemCount;
+    mapping(Collection => mapping(uint256 => Item)) listedItems;
 
     struct Item {
-        uint256 tokenId;
         uint256 price;
-        IERC721 _collection;
-        address owner;
         address seller;
-        bool isSold;
+    }
+
+    struct Offer {
+        address offerFrom;
+        uint256 offeredPrice;
+        uint256 tokenId;
     }
 
     function createCollection(string memory name, string memory description)
@@ -46,7 +55,7 @@ contract Marketplace is Ownable, ReentrancyGuard {
             msg.sender
         );
 
-        emit LogCollectionCreated(name, description);
+        emit CollectionCreated(name, description);
     }
 
     function getUserCollectionTotal() public view returns (uint256) {
@@ -58,70 +67,67 @@ contract Marketplace is Ownable, ReentrancyGuard {
     }
 
     function listItem(
-        uint256 index,
+        address collectionOwner,
+        uint256 collectionIndex,
         uint256 tokenId,
         uint256 price
-    ) external {
-        require(
-            index > 0 && userCollections[msg.sender] >= index,
-            "Collection doesn't exist!"
-        );
+    ) external payable collectionExist(collectionOwner, collectionIndex) {
+        require(msg.value == listFee, "Fee doesn't match!");
 
-        Collection currentCollection = collection[msg.sender][index];
+        Collection _collection = collection[collectionOwner][collectionIndex];
         address contractAddress = address(this);
 
-        currentCollection.transferFrom(msg.sender, contractAddress, tokenId);
-
-        itemCount++;
-        listedItems[itemCount] = Item(
-            tokenId,
-            price,
-            currentCollection,
-            payable(msg.sender),
-            payable(contractAddress),
-            false
+        require(
+            _collection.ownerOf(tokenId) == msg.sender,
+            "Only owner can list token!"
+        );
+        require(
+            _collection.isApprovedForAll(msg.sender, address(this)),
+            "Token not approved for marketplace!"
+        );
+        require(
+            listedItems[_collection][tokenId].price == 0,
+            "Item already listed!"
         );
 
-        emit LogListedItem(tokenId, msg.sender, contractAddress);
+        listedItems[_collection][tokenId] = Item(price, payable(msg.sender));
+
+        collectedFee += msg.value;
+
+        emit ItemListed(tokenId, msg.sender, contractAddress);
     }
 
-    function buyItem(uint256 listedItemIndex, uint256 collectionIndex)
+    function buyItem(
+        uint256 tokenId,
+        uint256 collectionIndex,
+        address collectionOwner
+    )
         external
         payable
         nonReentrant
+        collectionExist(collectionOwner, collectionIndex)
     {
-        require(
-            itemCount > 0 && listedItemIndex <= itemCount,
-            "Item doesn't exist!"
-        );
+        Collection _collection = collection[collectionOwner][collectionIndex];
+        Item memory item = listedItems[_collection][tokenId];
 
-        Item storage item = listedItems[listedItemIndex];
-
-        require(!item.isSold, "Item is already sold!");
+        require(item.price > 0, "Item doesn't exist!");
         require(msg.value == item.price, "Sum doesn't match price of item!");
-        require(
-            collectionIndex > 0 &&
-                collectionIndex <= userCollections[item.owner],
-            "Collection doesn't exist!"
+
+        payable(item.seller).transfer(msg.value);
+
+        _collection.transferFrom(
+            _collection.ownerOf(tokenId),
+            msg.sender,
+            tokenId
         );
 
-        uint256 tokenId = item.tokenId;
-        Collection _collection = collection[item.owner][collectionIndex];
+        delete (listedItems[_collection][tokenId]);
 
-        payable(item.owner).transfer(msg.value);
-
-        item.isSold = true;
-
-        _collection.transferFrom(address(this), msg.sender, tokenId);
-
-        emit LogBoughtItem(tokenId, msg.sender, item.owner, item.price);
-    }
-
-    function getCollectedFee() external view returns (uint256) {
-        return collectedFee;
+        emit ItemBought(tokenId, msg.sender, item.seller, item.price);
     }
 
     function withrawFee() external onlyOwner {
         payable(owner()).transfer(collectedFee);
+        collectedFee = 0;
     }
 }
