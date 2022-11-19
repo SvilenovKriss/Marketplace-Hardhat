@@ -21,16 +21,33 @@ contract Marketplace is Ownable, ReentrancyGuard {
         uint256 price
     );
 
-    modifier collectionExist(address collectionOwner, uint256 index) {
+    modifier collectionExist(address collectionOwner, uint256 collectionIndex) {
         require(
-            index > 0 && userCollections[collectionOwner] >= index,
+            collectionIndex > 0 &&
+                userCollections[collectionOwner] >= collectionIndex,
             "Collection doesn't exist!"
+        );
+        _;
+    }
+
+    modifier tokenOwner(
+        address collectionOwner,
+        uint256 collectionIndex,
+        uint256 tokenId
+    ) {
+        Collection _collection = collection[collectionOwner][collectionIndex];
+        require(
+            _collection.ownerOf(tokenId) == msg.sender,
+            "Sender is not owner of token!"
         );
         _;
     }
 
     mapping(address => mapping(uint256 => Collection)) private collection;
     mapping(address => uint256) private userCollections;
+    //CONTRACT ADDRESS -> ITERATON NUMBER -> OFFER STRUCT
+    mapping(Collection => mapping(uint256 => Offer[])) offers;
+    //CONTRACT ADDRESS -> TOKENID -> ITEM
     mapping(Collection => mapping(uint256 => Item)) listedItems;
 
     struct Item {
@@ -41,7 +58,6 @@ contract Marketplace is Ownable, ReentrancyGuard {
     struct Offer {
         address offerFrom;
         uint256 offeredPrice;
-        uint256 tokenId;
     }
 
     function createCollection(string memory name, string memory description)
@@ -71,16 +87,17 @@ contract Marketplace is Ownable, ReentrancyGuard {
         uint256 collectionIndex,
         uint256 tokenId,
         uint256 price
-    ) external payable collectionExist(collectionOwner, collectionIndex) {
+    )
+        external
+        payable
+        collectionExist(collectionOwner, collectionIndex)
+        tokenOwner(collectionOwner, collectionIndex, tokenId)
+    {
         require(msg.value == listFee, "Fee doesn't match!");
 
         Collection _collection = collection[collectionOwner][collectionIndex];
         address contractAddress = address(this);
 
-        require(
-            _collection.ownerOf(tokenId) == msg.sender,
-            "Only owner can list token!"
-        );
         require(
             _collection.isApprovedForAll(msg.sender, address(this)),
             "Token not approved for marketplace!"
@@ -124,6 +141,60 @@ contract Marketplace is Ownable, ReentrancyGuard {
         delete (listedItems[_collection][tokenId]);
 
         emit ItemBought(tokenId, msg.sender, item.seller, item.price);
+    }
+
+    function makeOffer(
+        address collectionOwner,
+        uint256 collectionIndex,
+        uint256 tokenId
+    )
+        external
+        payable
+        collectionExist(collectionOwner, collectionIndex)
+        tokenOwner(collectionOwner, collectionIndex, tokenId)
+    {
+        require(msg.value > 0, "You need to send sum bigger than 0.");
+
+        Collection _collection = collection[collectionOwner][collectionIndex];
+        offers[_collection][tokenId].push(Offer(msg.sender, msg.value));
+    }
+
+    function cancelOffer(
+        address collectionOwner,
+        uint256 collectionIndex,
+        uint256 tokenId,
+        uint256 index
+    ) external collectionExist(collectionOwner, collectionIndex) {
+        Collection _collection = collection[collectionOwner][collectionIndex];
+
+        require(
+            _collection.ownerOf(tokenId) == msg.sender || msg.sender == owner(),
+            "Sender is not owner of token!"
+        );
+
+        delete offers[_collection][tokenId][index];
+    }
+
+    function approveOffer(
+        address collectionOwner,
+        uint256 collectionIndex,
+        uint256 tokenId,
+        uint256 index
+    )
+        external
+        collectionExist(collectionOwner, collectionIndex)
+        tokenOwner(collectionOwner, collectionIndex, tokenId)
+        nonReentrant
+    {
+        Collection _collection = collection[collectionOwner][collectionIndex];
+        Offer[] storage _offers = offers[_collection][tokenId];
+
+        require(
+            _offers.length > index && _offers[index].offerFrom != address(0),
+            "Offer doesn't exist!"
+        );
+
+        payable(msg.sender).transfer(_offers[index].offeredPrice);
     }
 
     function withrawFee() external onlyOwner {
