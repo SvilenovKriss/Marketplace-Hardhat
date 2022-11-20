@@ -38,7 +38,7 @@ contract Marketplace is Ownable, ReentrancyGuard {
         Collection _collection = collection[collectionOwner][collectionIndex];
         require(
             _collection.ownerOf(tokenId) == msg.sender,
-            "Sender is not owner of token!"
+            "Sender is not token owner!"
         );
         _;
     }
@@ -147,15 +147,23 @@ contract Marketplace is Ownable, ReentrancyGuard {
         address collectionOwner,
         uint256 collectionIndex,
         uint256 tokenId
-    )
-        external
-        payable
-        collectionExist(collectionOwner, collectionIndex)
-        tokenOwner(collectionOwner, collectionIndex, tokenId)
-    {
+    ) external payable collectionExist(collectionOwner, collectionIndex) {
         require(msg.value > 0, "You need to send sum bigger than 0.");
 
         Collection _collection = collection[collectionOwner][collectionIndex];
+
+        //Expected to throw error if token id doesn't exist.
+        address tokenOwner = _collection.ownerOf(tokenId);
+
+        require(
+            tokenOwner != msg.sender,
+            "You cannot make offer to your token!"
+        );
+        require(
+            listedItems[_collection][tokenId].seller == address(0),
+            "You cannot make offer to nonlisted item!"
+        );
+
         offers[_collection][tokenId].push(Offer(msg.sender, msg.value));
     }
 
@@ -164,15 +172,25 @@ contract Marketplace is Ownable, ReentrancyGuard {
         uint256 collectionIndex,
         uint256 tokenId,
         uint256 index
-    ) external collectionExist(collectionOwner, collectionIndex) {
+    ) external collectionExist(collectionOwner, collectionIndex) nonReentrant {
         Collection _collection = collection[collectionOwner][collectionIndex];
+        Offer[] storage _offers = offers[_collection][tokenId];
 
         require(
-            _collection.ownerOf(tokenId) == msg.sender || msg.sender == owner(),
-            "Sender is not owner of token!"
+            _offers.length > index && _offers[index].offerFrom != address(0),
+            "Offer doesn't exist!"
         );
 
-        delete offers[_collection][tokenId][index];
+        require(
+            _collection.ownerOf(tokenId) == msg.sender ||
+                msg.sender == _offers[index].offerFrom,
+            "Sender has no permissions!"
+        );
+
+        payable(_offers[index].offerFrom).transfer(_offers[index].offeredPrice);
+
+        _offers[index] = _offers[_offers.length - 1];
+        _offers.pop();
     }
 
     function approveOffer(
@@ -188,13 +206,18 @@ contract Marketplace is Ownable, ReentrancyGuard {
     {
         Collection _collection = collection[collectionOwner][collectionIndex];
         Offer[] storage _offers = offers[_collection][tokenId];
+        address _offeredFrom = _offers[index].offerFrom;
 
         require(
-            _offers.length > index && _offers[index].offerFrom != address(0),
+            _offers.length > index && _offeredFrom != address(0),
             "Offer doesn't exist!"
         );
 
         payable(msg.sender).transfer(_offers[index].offeredPrice);
+        _collection.transferFrom(msg.sender, _offeredFrom, tokenId);
+
+        _offers[index] = _offers[_offers.length - 1];
+        _offers.pop();
     }
 
     function withrawFee() external onlyOwner {
