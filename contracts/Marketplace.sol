@@ -21,10 +21,12 @@ error CannotMakeOfferToOwnableToken();
 error CannotOfferToListedItem(uint256 tokenId);
 error OfferDoesNotExist();
 error SenderHasNoPermissions(address sender);
+error NothingToWithdraw();
+error ItemPriceMustGreaterThanZero();
 
 contract Marketplace is Ownable, ReentrancyGuard {
     uint256 public listFee = 0.02 ether;
-    uint256 public collectedFee;
+    uint256 private lockedAmount;
 
     event CollectionCreated(string name, string description);
     event ItemListed(uint256 _tokenId, address from, address to);
@@ -65,13 +67,8 @@ contract Marketplace is Ownable, ReentrancyGuard {
     mapping(address => uint256) private userCollections;
     //CONTRACT ADDRESS -> ITERATON NUMBER -> OFFER STRUCT
     mapping(Collection => mapping(uint256 => Offer[])) offers;
-    //CONTRACT ADDRESS -> TOKENID -> ITEM
-    mapping(Collection => mapping(uint256 => Item)) listedItems;
-
-    struct Item {
-        uint256 price;
-        address seller;
-    }
+    //CONTRACT ADDRESS -> TOKENID -> ITEM PRICE.
+    mapping(Collection => mapping(uint256 => uint256)) listedItems;
 
     struct Offer {
         address offerFrom;
@@ -114,6 +111,9 @@ contract Marketplace is Ownable, ReentrancyGuard {
         if (msg.value != listFee) {
             revert ListingFeeNotMatch(msg.value);
         }
+        if (price == 0) {
+            revert ItemPriceMustGreaterThanZero();
+        }
 
         Collection _collection = collection[collectionOwner][collectionIndex];
         address contractAddress = address(this);
@@ -124,13 +124,11 @@ contract Marketplace is Ownable, ReentrancyGuard {
         ) {
             revert TokenNotApproved();
         }
-        if (listedItems[_collection][tokenId].price != 0) {
+        if (listedItems[_collection][tokenId] != 0) {
             revert ItemAlreadyListed(tokenId);
         }
 
-        listedItems[_collection][tokenId] = Item(price, payable(msg.sender));
-
-        collectedFee += msg.value;
+        listedItems[_collection][tokenId] = price;
 
         emit ItemListed(tokenId, msg.sender, contractAddress);
     }
@@ -146,29 +144,30 @@ contract Marketplace is Ownable, ReentrancyGuard {
         collectionExist(collectionOwner, collectionIndex)
     {
         Collection _collection = collection[collectionOwner][collectionIndex];
-        Item memory item = listedItems[_collection][tokenId];
+        address _tokenOwner = _collection.ownerOf(tokenId);
+        uint256 itemPrice = listedItems[_collection][tokenId];
 
-        if (item.price == 0) {
+        if (itemPrice == 0) {
             revert ItemNotListed(tokenId);
         }
-        if (msg.value != item.price) {
+        if (msg.value != itemPrice) {
             revert SenderValueNotEqualToPrice(msg.sender, msg.value);
         }
-        if (msg.sender == item.seller) {
+        if (msg.sender == _tokenOwner) {
             revert CannotBuyOwnToken();
         }
 
-        payable(item.seller).transfer(msg.value);
+        payable(_tokenOwner).transfer(msg.value);
 
         _collection.transferFrom(
-            _collection.ownerOf(tokenId),
+           _tokenOwner,
             msg.sender,
             tokenId
         );
 
-        delete (listedItems[_collection][tokenId]);
+        listedItems[_collection][tokenId] = 0;
 
-        emit ItemBought(tokenId, msg.sender, item.seller, item.price);
+        emit ItemBought(tokenId, msg.sender, _tokenOwner, itemPrice);
     }
 
     function makeOffer(
@@ -188,11 +187,13 @@ contract Marketplace is Ownable, ReentrancyGuard {
         if (_tokenOwner == msg.sender) {
             revert CannotMakeOfferToOwnableToken();
         }
-        if (listedItems[_collection][tokenId].seller != address(0)) {
+        if (listedItems[_collection][tokenId] != 0) {
             revert CannotOfferToListedItem(tokenId);
         }
 
         offers[_collection][tokenId].push(Offer(msg.sender, msg.value));
+
+        lockedAmount += msg.value;
 
         emit OfferCreated(msg.sender, _tokenOwner, msg.value);
     }
@@ -220,6 +221,10 @@ contract Marketplace is Ownable, ReentrancyGuard {
 
         payable(_offers[index].offerFrom).transfer(_offers[index].offeredPrice);
 
+        unchecked {
+            lockedAmount -= _offers[index].offeredPrice;
+        }
+
         _offers[index] = _offers[_offers.length - 1];
         _offers.pop();
 
@@ -239,7 +244,6 @@ contract Marketplace is Ownable, ReentrancyGuard {
     {
         Collection _collection = collection[collectionOwner][collectionIndex];
         Offer[] storage _offers = offers[_collection][tokenId];
-        address _offeredFrom = _offers[index].offerFrom;
 
         if (
             !(_offers.length > index && _offers[index].offerFrom != address(0))
@@ -247,7 +251,14 @@ contract Marketplace is Ownable, ReentrancyGuard {
             revert OfferDoesNotExist();
         }
 
+        address _offeredFrom = _offers[index].offerFrom;
+
         payable(msg.sender).transfer(_offers[index].offeredPrice);
+
+        unchecked {
+            lockedAmount -= _offers[index].offeredPrice;
+        }
+
         _collection.transferFrom(msg.sender, _offeredFrom, tokenId);
 
         emit OfferApproved(
@@ -261,7 +272,12 @@ contract Marketplace is Ownable, ReentrancyGuard {
     }
 
     function withrawFee() external onlyOwner {
-        payable(owner()).transfer(collectedFee);
-        collectedFee = 0;
+        uint256 balance = address(this).balance; 
+
+        if (balance == 0) {
+            revert NothingToWithdraw();
+        }
+
+        payable(owner()).transfer(balance - lockedAmount);
     }
 }
