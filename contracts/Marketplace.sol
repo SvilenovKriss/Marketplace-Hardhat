@@ -65,10 +65,10 @@ contract Marketplace is Ownable, ReentrancyGuard {
 
     mapping(address => mapping(uint256 => Collection)) private collection;
     mapping(address => uint256) private userCollections;
-    //CONTRACT ADDRESS -> ITERATON NUMBER -> OFFER STRUCT
-    mapping(Collection => mapping(uint256 => Offer[])) offers;
+    //CONTRACT ADDRESS -> TOKENID -> OFFER STRUCT
+    mapping(Collection => mapping(uint256 => Offer[])) public offers;
     //CONTRACT ADDRESS -> TOKENID -> ITEM PRICE.
-    mapping(Collection => mapping(uint256 => uint256)) listedItems;
+    mapping(Collection => mapping(uint256 => uint256)) public listedItems;
 
     struct Offer {
         address offerFrom;
@@ -134,9 +134,9 @@ contract Marketplace is Ownable, ReentrancyGuard {
     }
 
     function buyItem(
-        uint256 tokenId,
+        address collectionOwner,
         uint256 collectionIndex,
-        address collectionOwner
+        uint256 tokenId
     )
         external
         payable
