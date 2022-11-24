@@ -1,8 +1,22 @@
-import { HardhatUserConfig } from "hardhat/config";
+import { HardhatUserConfig, task } from "hardhat/config";
+import { HardhatRuntimeEnvironment } from "hardhat/types";
 import "@nomicfoundation/hardhat-toolbox";
 import * as dotenv from 'dotenv'
 
-dotenv.config();  
+import main from "./scripts/deploy-testnet";
+import deployLocal from "./scripts/deploy-local";
+
+dotenv.config();
+
+task("deploy-local", "Deploys contract on local node")
+  .setAction(async (params, hre: HardhatRuntimeEnvironment) => {
+    await deployLocal(hre);
+  });
+
+task("deploy-testnet", "Deploys contract on a provided network")
+  .setAction(async (params, hre: HardhatRuntimeEnvironment): Promise<void> => {
+    await main(hre);
+  });
 
 const config: HardhatUserConfig = {
   solidity: {
