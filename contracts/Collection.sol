@@ -8,7 +8,7 @@ contract Collection is ERC721URIStorage {
     using Counters for Counters.Counter;
 
     address public owner;
-    Counters.Counter private tokenId;
+    Counters.Counter public tokenId;
 
     constructor(
         string memory name,

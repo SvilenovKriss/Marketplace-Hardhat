@@ -23,6 +23,7 @@ error OfferDoesNotExist();
 error SenderHasNoPermissions(address sender);
 error NothingToWithdraw();
 error ItemPriceMustGreaterThanZero();
+error IndexDoesNotExist();
 
 contract Marketplace is Ownable, ReentrancyGuard {
     uint256 public listFee = 0.02 ether;
@@ -63,12 +64,15 @@ contract Marketplace is Ownable, ReentrancyGuard {
         _;
     }
 
+    //USER ADDRESS => INDEX => COLLECTION.
     mapping(address => mapping(uint256 => Collection)) private collection;
     mapping(address => uint256) private userCollections;
-    //CONTRACT ADDRESS -> TOKENID -> OFFER STRUCT
+    //CONTRACT ADDRESS -> TOKENID -> OFFER STRUCT.
     mapping(Collection => mapping(uint256 => Offer[])) public offers;
     //CONTRACT ADDRESS -> TOKENID -> ITEM PRICE.
     mapping(Collection => mapping(uint256 => uint256)) public listedItems;
+    //USER ADDRESS => NONE-USER-COLLECTIONS.
+    mapping(address => Collection[]) public userBoughtTokens;
 
     struct Offer {
         address offerFrom;
@@ -89,12 +93,24 @@ contract Marketplace is Ownable, ReentrancyGuard {
         emit CollectionCreated(name, description);
     }
 
-    function getUserCollectionTotal() public view returns (uint256) {
-        return userCollections[msg.sender];
+    function getUserCollectionTotal(address _addr)
+        public
+        view
+        returns (uint256)
+    {
+        return userCollections[_addr];
     }
 
-    function getCollection(uint256 index) external view returns (Collection) {
-        return collection[msg.sender][index];
+    function getCollection(address _addr, uint256 index)
+        external
+        view
+        returns (Collection)
+    {
+        return collection[_addr][index];
+    }
+
+    function getTotalBoughtTokens(address _addr) external view returns (uint256) {
+        return userBoughtTokens[_addr].length;
     }
 
     function listItem(
@@ -136,7 +152,8 @@ contract Marketplace is Ownable, ReentrancyGuard {
     function buyItem(
         address collectionOwner,
         uint256 collectionIndex,
-        uint256 tokenId
+        uint256 tokenId,
+        uint256 indexOfBoughtToken
     )
         external
         payable
@@ -159,13 +176,44 @@ contract Marketplace is Ownable, ReentrancyGuard {
 
         payable(_tokenOwner).transfer(msg.value);
 
-        _collection.transferFrom(
-           _tokenOwner,
-            msg.sender,
-            tokenId
-        );
+        _collection.transferFrom(_tokenOwner, msg.sender, tokenId);
 
         listedItems[_collection][tokenId] = 0;
+
+        if (msg.sender == collectionOwner) {
+            // HERE WE CHECK IF PERSON BUYING THE TOKEN IS THE OWNER OF THE COLLECTION.
+            Collection[] storage _userExternalCollections = userBoughtTokens[
+                _tokenOwner
+            ];
+
+            if (_userExternalCollections.length <= indexOfBoughtToken) {
+                revert IndexDoesNotExist();
+            }
+
+            _userExternalCollections[
+                indexOfBoughtToken
+            ] = _userExternalCollections[_userExternalCollections.length - 1];
+            _userExternalCollections.pop();
+        } else if (_tokenOwner == collectionOwner) {
+            // HERE WE CHECK IF THE PERSON WHO SELLS THE TOKEN IS THE OWNER OF THE COLLECTION.
+            userBoughtTokens[msg.sender].push(_collection);
+        } else {
+            // HERE NO ONE IS OWNER OF THE TOKENS COLLECTION.
+            Collection[] storage _userExternalCollections = userBoughtTokens[
+                _tokenOwner
+            ];
+
+            if (userBoughtTokens[_tokenOwner].length <= indexOfBoughtToken) {
+                revert IndexDoesNotExist();
+            }
+
+            _userExternalCollections[
+                indexOfBoughtToken
+            ] = _userExternalCollections[_userExternalCollections.length - 1];
+            _userExternalCollections.pop();
+
+            userBoughtTokens[msg.sender].push(_collection);
+        }
 
         emit ItemBought(tokenId, msg.sender, _tokenOwner, itemPrice);
     }
@@ -272,7 +320,7 @@ contract Marketplace is Ownable, ReentrancyGuard {
     }
 
     function withrawFee() external onlyOwner {
-        uint256 balance = address(this).balance; 
+        uint256 balance = address(this).balance;
 
         if (balance == 0) {
             revert NothingToWithdraw();
