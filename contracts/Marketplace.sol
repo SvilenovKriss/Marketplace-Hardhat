@@ -66,13 +66,21 @@ contract Marketplace is Ownable, ReentrancyGuard {
 
     //USER ADDRESS => INDEX => COLLECTION.
     mapping(address => mapping(uint256 => Collection)) private collection;
+    //USER ADDRESS => NUMBER OF COLLECTION HE CREATED.
     mapping(address => uint256) private userCollections;
     //CONTRACT ADDRESS -> TOKENID -> OFFER STRUCT.
     mapping(Collection => mapping(uint256 => Offer[])) public offers;
-    //CONTRACT ADDRESS -> TOKENID -> ITEM PRICE.
-    mapping(Collection => mapping(uint256 => uint256)) public listedItems;
     //USER ADDRESS => NONE-USER-COLLECTIONS.
     mapping(address => Collection[]) public userBoughtTokens;
+    //Collection => tokenId => bool(listed or not.)
+    mapping(Collection => mapping(uint256 => bool)) public listedItemStatus;
+    Item[] public listedItems;
+
+    struct Item {
+        address collectionAddress;
+        uint256 tokenId;
+        uint256 price;
+    }
 
     struct Offer {
         address offerFrom;
@@ -109,8 +117,24 @@ contract Marketplace is Ownable, ReentrancyGuard {
         return collection[_addr][index];
     }
 
-    function getTotalBoughtTokens(address _addr) external view returns (uint256) {
+    function getTotalBoughtTokens(address _addr)
+        external
+        view
+        returns (uint256)
+    {
         return userBoughtTokens[_addr].length;
+    }
+
+    function getTotalListedItems() external view returns (uint256) {
+        return listedItems.length;
+    }
+
+    function getTotalOffersByToken(Collection _collection, uint256 tokenId)
+        external
+        view
+        returns (uint256)
+    {
+        return offers[_collection][tokenId].length;
     }
 
     function listItem(
@@ -140,34 +164,31 @@ contract Marketplace is Ownable, ReentrancyGuard {
         ) {
             revert TokenNotApproved();
         }
-        if (listedItems[_collection][tokenId] != 0) {
+        if (listedItemStatus[_collection][tokenId]) {
             revert ItemAlreadyListed(tokenId);
         }
 
-        listedItems[_collection][tokenId] = price;
+        listedItems.push(Item(address(_collection), tokenId, price));
+        listedItemStatus[_collection][tokenId] = true;
 
         emit ItemListed(tokenId, msg.sender, contractAddress);
     }
 
-    function buyItem(
-        address collectionOwner,
-        uint256 collectionIndex,
-        uint256 tokenId,
-        uint256 indexOfBoughtToken
-    )
+    function buyItem(uint256 item, uint256 indexOfBoughtToken)
         external
         payable
         nonReentrant
-        collectionExist(collectionOwner, collectionIndex)
     {
-        Collection _collection = collection[collectionOwner][collectionIndex];
-        address _tokenOwner = _collection.ownerOf(tokenId);
-        uint256 itemPrice = listedItems[_collection][tokenId];
-
-        if (itemPrice == 0) {
-            revert ItemNotListed(tokenId);
+        if (item >= listedItems.length) {
+            revert IndexDoesNotExist();
         }
-        if (msg.value != itemPrice) {
+
+        Item memory _item = listedItems[item];
+        Collection _collection = Collection(_item.collectionAddress);
+        address _tokenOwner = _collection.ownerOf(_item.tokenId);
+        address collectionOwner = _collection.owner();
+
+        if (msg.value != _item.price) {
             revert SenderValueNotEqualToPrice(msg.sender, msg.value);
         }
         if (msg.sender == _tokenOwner) {
@@ -176,9 +197,11 @@ contract Marketplace is Ownable, ReentrancyGuard {
 
         payable(_tokenOwner).transfer(msg.value);
 
-        _collection.transferFrom(_tokenOwner, msg.sender, tokenId);
+        _collection.transferFrom(_tokenOwner, msg.sender, _item.tokenId);
 
-        listedItems[_collection][tokenId] = 0;
+        listedItemStatus[_collection][_item.tokenId] = false;
+        listedItems[item] = listedItems[listedItems.length - 1];
+        listedItems.pop();
 
         if (msg.sender == collectionOwner) {
             // HERE WE CHECK IF PERSON BUYING THE TOKEN IS THE OWNER OF THE COLLECTION.
@@ -215,7 +238,7 @@ contract Marketplace is Ownable, ReentrancyGuard {
             userBoughtTokens[msg.sender].push(_collection);
         }
 
-        emit ItemBought(tokenId, msg.sender, _tokenOwner, itemPrice);
+        emit ItemBought(_item.tokenId, msg.sender, _tokenOwner, _item.price);
     }
 
     function makeOffer(
@@ -235,7 +258,7 @@ contract Marketplace is Ownable, ReentrancyGuard {
         if (_tokenOwner == msg.sender) {
             revert CannotMakeOfferToOwnableToken();
         }
-        if (listedItems[_collection][tokenId] != 0) {
+        if (listedItemStatus[_collection][tokenId]) {
             revert CannotOfferToListedItem(tokenId);
         }
 
