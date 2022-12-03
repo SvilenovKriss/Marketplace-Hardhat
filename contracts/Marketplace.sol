@@ -18,7 +18,6 @@ error ItemNotListed(uint256 tokenId);
 error SenderValueNotEqualToPrice(address sender, uint256 _val);
 error OfferPriceCannotBeZero(uint256 price);
 error CannotMakeOfferToOwnableToken();
-error CannotOfferToListedItem(uint256 tokenId);
 error OfferDoesNotExist();
 error SenderHasNoPermissions(address sender);
 error NothingToWithdraw();
@@ -71,10 +70,21 @@ contract Marketplace is Ownable, ReentrancyGuard {
     //CONTRACT ADDRESS -> TOKENID -> OFFER STRUCT.
     mapping(Collection => mapping(uint256 => Offer[])) public offers;
     //USER ADDRESS => NONE-USER-COLLECTIONS.
-    mapping(address => Collection[]) public userBoughtTokens;
+    mapping(address => ExternalToken[]) public userBoughtTokens;
     //Collection => tokenId => bool(listed or not.)
-    mapping(Collection => mapping(uint256 => bool)) public listedItemStatus;
+    mapping(Collection => mapping(uint256 => ItemStatus))
+        public listedItemStatus;
     Item[] public listedItems;
+
+    struct ExternalToken {
+        address collectionAddress;
+        uint256 tokenId;
+    }
+
+    struct ItemStatus {
+        bool isListed;
+        uint256 price;
+    }
 
     struct Item {
         address collectionAddress;
@@ -164,12 +174,12 @@ contract Marketplace is Ownable, ReentrancyGuard {
         ) {
             revert TokenNotApproved();
         }
-        if (listedItemStatus[_collection][tokenId]) {
+        if (listedItemStatus[_collection][tokenId].isListed) {
             revert ItemAlreadyListed(tokenId);
         }
 
         listedItems.push(Item(address(_collection), tokenId, price));
-        listedItemStatus[_collection][tokenId] = true;
+        listedItemStatus[_collection][tokenId] = ItemStatus(true, price);
 
         emit ItemListed(tokenId, msg.sender, contractAddress);
     }
@@ -199,43 +209,39 @@ contract Marketplace is Ownable, ReentrancyGuard {
 
         _collection.transferFrom(_tokenOwner, msg.sender, _item.tokenId);
 
-        listedItemStatus[_collection][_item.tokenId] = false;
+        delete listedItemStatus[_collection][_item.tokenId];
         listedItems[item] = listedItems[listedItems.length - 1];
         listedItems.pop();
 
-        if (msg.sender == collectionOwner) {
-            // HERE WE CHECK IF PERSON BUYING THE TOKEN IS THE OWNER OF THE COLLECTION.
-            Collection[] storage _userExternalCollections = userBoughtTokens[
-                _tokenOwner
-            ];
-
-            if (_userExternalCollections.length <= indexOfBoughtToken) {
-                revert IndexDoesNotExist();
-            }
-
-            _userExternalCollections[
-                indexOfBoughtToken
-            ] = _userExternalCollections[_userExternalCollections.length - 1];
-            _userExternalCollections.pop();
-        } else if (_tokenOwner == collectionOwner) {
-            // HERE WE CHECK IF THE PERSON WHO SELLS THE TOKEN IS THE OWNER OF THE COLLECTION.
-            userBoughtTokens[msg.sender].push(_collection);
+        if (_tokenOwner == collectionOwner) {
+            userBoughtTokens[msg.sender].push(
+                ExternalToken(address(_collection), _item.tokenId)
+            );
         } else {
-            // HERE NO ONE IS OWNER OF THE TOKENS COLLECTION.
-            Collection[] storage _userExternalCollections = userBoughtTokens[
+            ExternalToken[] storage _userExternalTokens = userBoughtTokens[
                 _tokenOwner
             ];
 
-            if (userBoughtTokens[_tokenOwner].length <= indexOfBoughtToken) {
+            if (
+                _userExternalTokens.length <= indexOfBoughtToken ||
+                (_userExternalTokens[indexOfBoughtToken].collectionAddress !=
+                    address(_collection) ||
+                    _userExternalTokens[indexOfBoughtToken].tokenId !=
+                    _item.tokenId)
+            ) {
                 revert IndexDoesNotExist();
             }
 
-            _userExternalCollections[
-                indexOfBoughtToken
-            ] = _userExternalCollections[_userExternalCollections.length - 1];
-            _userExternalCollections.pop();
+            _userExternalTokens[indexOfBoughtToken] = _userExternalTokens[
+                _userExternalTokens.length - 1
+            ];
+            _userExternalTokens.pop();
 
-            userBoughtTokens[msg.sender].push(_collection);
+            if (msg.sender != collectionOwner) {
+                userBoughtTokens[msg.sender].push(
+                    ExternalToken(address(_collection), _item.tokenId)
+                );
+            }
         }
 
         emit ItemBought(_item.tokenId, msg.sender, _tokenOwner, _item.price);
@@ -257,9 +263,6 @@ contract Marketplace is Ownable, ReentrancyGuard {
 
         if (_tokenOwner == msg.sender) {
             revert CannotMakeOfferToOwnableToken();
-        }
-        if (listedItemStatus[_collection][tokenId]) {
-            revert CannotOfferToListedItem(tokenId);
         }
 
         offers[_collection][tokenId].push(Offer(msg.sender, msg.value));
