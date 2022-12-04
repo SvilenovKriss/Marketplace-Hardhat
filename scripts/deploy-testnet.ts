@@ -30,7 +30,7 @@ async function main(hre: HardhatRuntimeEnvironment): Promise<void> {
         });
       } catch (err: (ErrorMessage | any)) {
         if (err.message.includes("Reason: Already Verified")) {
-          await hre.run('print', { address: marketplaceContract.address });
+          console.log(err.message);
         }
       }
     }, 60000);
