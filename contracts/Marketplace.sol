@@ -305,6 +305,8 @@ contract Marketplace is Ownable, ReentrancyGuard {
         emit OfferCanceled(msg.sender);
     }
 
+    //*NOTICED IN THE LAST SECOND* - /BUG/
+    //On approve we're suppose to return all the offered money to the users. 
     function approveOffer(
         address collectionOwner,
         uint256 collectionIndex,
